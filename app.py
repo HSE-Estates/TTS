@@ -136,7 +136,12 @@ voices = {
 
 # User Interface
 st.markdown("### Configuration")
-selected_voice = st.selectbox("Select Synthesiser Voice:", list(voices.keys()))
+voice_names = list(voices.keys())
+selected_voice = st.selectbox(
+    "Select Synthesiser Voice:",
+    voice_names,
+    index=voice_names.index("👩🏼 Lily (GB)")
+)
 
 text_input = st.text_area(
     "Enter the text you wish to convert:", 
