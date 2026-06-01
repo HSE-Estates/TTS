@@ -8,6 +8,11 @@ from kokoro import KPipeline
 # Configure the Streamlit page
 st.set_page_config(page_title="Secure Portal", page_icon="🔒", layout="centered")
 
+@st.cache_resource
+def load_pipeline():
+    # Load the pipeline without triggering external model downloads
+    return KPipeline(lang_code='b')
+    
 def check_password():
     """Returns `True` if the user has entered the correct password."""
     if st.session_state.get("password_correct", False):
