@@ -1,2 +1,5 @@
 streamlit
-edge_tts
+torch
+soundfile
+kokoro
+misaki[en]
