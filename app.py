@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import io
 import gc
 import json
@@ -112,7 +111,7 @@ st.markdown("""
 # HSE Header
 st.markdown(
     """
-    <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 2rem; background: white; padding: 1.5rem; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.05);">
+    <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 1rem; background: white; padding: 1.5rem; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.05);">
         <img src="https://www.esther.ie/wp-content/uploads/2022/05/HSE-Logo-Green-NEW-no-background.png" width="80">
         <div>
             <h2 style="margin: 0; font-size: 1.5rem;">AI Text-to-Speech</h2>
@@ -147,6 +146,16 @@ voices = {
 
 # ---------- Helpers ----------
 
+def render_embed(html: str, height: int):
+    """Embed sandboxed HTML/JS. Prefer st.iframe (current API);
+    fall back to the deprecated components.html on older Streamlit."""
+    if hasattr(st, "iframe"):
+        st.iframe(html, height=height)
+    else:
+        import streamlit.components.v1 as components
+        components.html(html, height=height)
+
+
 def preprocess_for_tts(sentence: str) -> str:
     """Expand abbreviations so the synthesiser reads them naturally."""
     return re.sub(r'(?i)\bhse\b', 'H S E', sentence)
@@ -165,54 +174,98 @@ def to_numpy(audio) -> np.ndarray:
     return np.asarray(audio, dtype=np.float32).reshape(-1)
 
 
-def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12):
-    """Synthesise sentence by sentence.
+def estimate_words(sentence: str, base: float, duration: float):
+    """Fallback: spread a sentence's duration across its words by length."""
+    toks = sentence.split()
+    if not toks:
+        return []
+    weights = [max(len(w), 1) for w in toks]
+    total = sum(weights)
+    out = []
+    t = base
+    for w, weight in zip(toks, weights):
+        d = duration * (weight / total)
+        out.append({"t": w, "ws": " ", "start": round(t, 4), "end": round(t + d, 4)})
+        t += d
+    return out
 
-    Returns (full_audio, segments) where segments is a list of
-    {text, start, end} in seconds, aligned to the concatenated audio.
+
+def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12):
+    """Synthesise sentence by sentence and collect word-level timings.
+
+    Returns (full_audio, words) where words is a list of
+    {t, ws, start, end} aligned to the concatenated audio. Uses Kokoro's
+    native token timestamps where available, otherwise estimates them.
     """
     sentences = split_sentences(text)
     gap = np.zeros(int(SAMPLE_RATE * gap_seconds), dtype=np.float32)
 
     audio_parts = []
-    segments = []
-    cursor = 0.0
+    words = []
+    cursor = 0.0  # global position in seconds
 
-    for idx, sentence in enumerate(sentences):
+    for s_idx, sentence in enumerate(sentences):
         processed = preprocess_for_tts(sentence)
         generator = pipeline(processed, voice=voice_id, speed=speed)
 
-        chunk_audio = [to_numpy(audio) for _, _, audio in generator]
-        if not chunk_audio:
+        sentence_audio = []
+        sentence_words = []
+        chunk_offset = 0.0  # position within this sentence
+
+        for result in generator:
+            audio = result.audio if hasattr(result, "audio") else result[2]
+            audio = to_numpy(audio)
+            duration = len(audio) / SAMPLE_RATE
+
+            for tok in (getattr(result, "tokens", None) or []):
+                text_t = getattr(tok, "text", None)
+                if not text_t:
+                    continue
+                ws = getattr(tok, "whitespace", "") or ""
+                a = getattr(tok, "start_ts", None)
+                b = getattr(tok, "end_ts", None)
+                if a is not None and b is not None:
+                    sentence_words.append({
+                        "t": text_t, "ws": ws,
+                        "start": round(cursor + chunk_offset + a, 4),
+                        "end": round(cursor + chunk_offset + b, 4),
+                    })
+                else:
+                    sentence_words.append({"t": text_t, "ws": ws,
+                                           "start": None, "end": None})
+
+            chunk_offset += duration
+            sentence_audio.append(audio)
+
+        if not sentence_audio:
             continue
 
-        seg_audio = np.concatenate(chunk_audio)
-        duration = len(seg_audio) / SAMPLE_RATE
+        seg = np.concatenate(sentence_audio)
+        seg_dur = len(seg) / SAMPLE_RATE
 
-        segments.append({
-            "text": sentence,
-            "start": round(cursor, 4),
-            "end": round(cursor + duration, 4),
-        })
-        cursor += duration
-        audio_parts.append(seg_audio)
+        # If this version returned no usable timestamps, estimate them.
+        if not any(w["start"] is not None for w in sentence_words):
+            sentence_words = estimate_words(sentence, cursor, seg_dur)
 
-        # Insert a small gap after every sentence except the last.
-        if idx < len(sentences) - 1:
+        words.extend(sentence_words)
+        cursor += seg_dur
+        audio_parts.append(seg)
+
+        if s_idx < len(sentences) - 1:
             audio_parts.append(gap)
             cursor += gap_seconds
 
     if not audio_parts:
         return None, []
 
-    return np.concatenate(audio_parts), segments
+    return np.concatenate(audio_parts), words
 
 
-def render_player(wav_bytes: bytes, segments: list):
-    """Custom audio player that highlights the current sentence
-    and lets the user click any sentence to play from there."""
+def render_player(wav_bytes: bytes, words: list):
+    """Custom player: highlights each word as it is spoken and lets the
+    user click any word to play from there."""
     b64 = base64.b64encode(wav_bytes).decode("ascii")
-    seg_json = json.dumps(segments)
+    words_json = json.dumps(words)
 
     html = """
     <div id="kokoro-card" style="
@@ -233,53 +286,49 @@ def render_player(wav_bytes: bytes, segments: list):
             line-height: 1.9;
             font-size: 1.05rem;
             color: #334155;
-            padding-right: 6px;"></div>
+            padding-right: 6px;
+            white-space: pre-wrap;"></div>
 
         <p style="margin: 12px 0 0; color: #94a3b8; font-size: 0.78rem;">
-            Click any sentence to play from there.
+            Click any word to play from there.
         </p>
     </div>
 
     <style>
-        #kokoro-transcript .seg {
+        #kokoro-transcript .wd {
             cursor: pointer;
-            padding: 1px 3px;
-            border-radius: 5px;
-            transition: background-color 0.15s ease, color 0.15s ease;
+            padding: 0 2px;
+            border-radius: 4px;
+            transition: background-color 0.12s ease, color 0.12s ease;
         }
-        #kokoro-transcript .seg:hover {
-            background-color: rgba(0, 191, 165, 0.12);
-        }
-        #kokoro-transcript .seg.active {
-            background-color: #00917a;
-            color: #ffffff;
-        }
+        #kokoro-transcript .wd:hover { background-color: rgba(0, 191, 165, 0.12); }
+        #kokoro-transcript .wd.active { background-color: #00917a; color: #ffffff; }
         #kokoro-transcript::-webkit-scrollbar { width: 8px; }
-        #kokoro-transcript::-webkit-scrollbar-thumb {
-            background: #cbd5e1; border-radius: 4px;
-        }
+        #kokoro-transcript::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
 
     <script>
-        const segments = __SEGMENTS__;
+        const words = __WORDS__;
         const player = document.getElementById('kokoro-player');
         const container = document.getElementById('kokoro-transcript');
+        const spans = [];
 
-        segments.forEach((seg, i) => {
+        words.forEach((w, i) => {
             const span = document.createElement('span');
-            span.className = 'seg';
-            span.dataset.idx = i;
-            span.textContent = seg.text + ' ';
-            span.addEventListener('click', () => {
-                player.currentTime = seg.start + 0.001;
-                player.play();
-            });
+            span.textContent = w.t;
+            if (w.start !== null) {
+                span.className = 'wd';
+                span.addEventListener('click', () => {
+                    player.currentTime = w.start + 0.001;
+                    player.play();
+                });
+            }
             container.appendChild(span);
+            if (w.ws) container.appendChild(document.createTextNode(w.ws));
+            spans.push(span);
         });
 
-        const spans = container.querySelectorAll('.seg');
         let activeIdx = -1;
-
         function setActive(idx) {
             if (idx === activeIdx) return;
             if (activeIdx >= 0 && spans[activeIdx]) spans[activeIdx].classList.remove('active');
@@ -292,8 +341,12 @@ def render_player(wav_bytes: bytes, segments: list):
 
         player.addEventListener('timeupdate', () => {
             const t = player.currentTime;
-            const idx = segments.findIndex(s => t >= s.start && t < s.end);
-            if (idx === -1) return;
+            let idx = -1;
+            for (let i = 0; i < words.length; i++) {
+                const w = words[i];
+                if (w.start !== null && t >= w.start && t < w.end) { idx = i; break; }
+            }
+            if (idx === -1) return;   // between words: hold current highlight
             setActive(idx);
         });
 
@@ -303,26 +356,28 @@ def render_player(wav_bytes: bytes, segments: list):
 
     html = (html
             .replace("__B64__", b64)
-            .replace("__SEGMENTS__", seg_json))
+            .replace("__WORDS__", words_json))
 
-    components.html(html, height=360)
+    render_embed(html, height=380)
 
 
 # ---------- User Interface ----------
 
-st.markdown("### Configuration")
-
-voice_names = list(voices.keys())
-selected_voice = st.selectbox(
-    "Select Synthesiser Voice:",
-    voice_names,
-    index=voice_names.index("👩🏼 Lily (GB)")
-)
-
-speed = st.slider(
-    "Pace (lower = slower, more natural)",
-    min_value=0.7, max_value=1.2, value=0.9, step=0.05
-)
+# Settings tucked behind a gear icon, aligned top-right.
+_, gear_col = st.columns([5, 1])
+with gear_col:
+    with st.popover("⚙️", use_container_width=True, help="Settings"):
+        st.markdown("**Settings**")
+        voice_names = list(voices.keys())
+        selected_voice = st.selectbox(
+            "Synthesiser voice",
+            voice_names,
+            index=voice_names.index("👩🏼 Lily (GB)")
+        )
+        speed = st.slider(
+            "Pace (lower = slower, more natural)",
+            min_value=0.7, max_value=1.2, value=0.9, step=0.05
+        )
 
 text_input = st.text_area(
     "Enter the text you wish to convert:",
@@ -340,17 +395,16 @@ if st.button("Synthesise Audio"):
         with st.spinner("Generating audio securely..."):
             try:
                 voice_id = voices[selected_voice]
-                full_audio, segments = synthesise(text_input, voice_id, speed)
+                full_audio, words = synthesise(text_input, voice_id, speed)
 
-                if full_audio is None or len(segments) == 0:
+                if full_audio is None or len(words) == 0:
                     raise ValueError("No audio was generated by the model.")
 
-                # Encode WAV and stash for re-renders.
                 buffer = io.BytesIO()
                 sf.write(buffer, full_audio, samplerate=SAMPLE_RATE, format='WAV')
                 st.session_state["tts_result"] = {
                     "wav": buffer.getvalue(),
-                    "segments": segments,
+                    "words": words,
                 }
 
                 # Free large arrays and reclaim memory.
@@ -365,7 +419,7 @@ if st.button("Synthesise Audio"):
 result = st.session_state.get("tts_result")
 if result:
     st.success("✅ Audio synthesised securely and offline.")
-    render_player(result["wav"], result["segments"])
+    render_player(result["wav"], result["words"])
     st.download_button(
         "Download WAV",
         data=result["wav"],
