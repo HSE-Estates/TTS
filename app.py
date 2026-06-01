@@ -8,11 +8,6 @@ from kokoro import KPipeline
 # Configure the Streamlit page
 st.set_page_config(page_title="Secure Portal", page_icon="🔒", layout="centered")
 
-@st.cache_resource
-def load_pipeline():
-    # Load the pipeline without triggering external model downloads
-    return KPipeline(lang_code='b')
-    
 def check_password():
     """Returns `True` if the user has entered the correct password."""
     if st.session_state.get("password_correct", False):
@@ -119,10 +114,9 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# --- KOKORO AI SETUP ---
 @st.cache_resource
 def load_pipeline():
-    # 'b' stands for British English!
+    # Load the pipeline without triggering external model downloads
     return KPipeline(lang_code='b')
 
 with st.spinner("Loading secure offline AI engine..."):
@@ -157,7 +151,7 @@ if st.button("Synthesise Audio"):
     else:
         with st.spinner("Generating audio securely..."):
             try:
-                # 1. PRE-PROCESS TEXT: Kokoro responds well to spaces for acronyms
+                # 1. PRE-PROCESS TEXT
                 processed_text = re.sub(r'(?i)\bhse\b', 'H S E', text_input)
                 
                 voice_id = voices[selected_voice]
@@ -169,8 +163,7 @@ if st.button("Synthesise Audio"):
                     speed=1
                 )
                 
-                # 3. Process the audio chunks into a single file
-                # Kokoro returns (graphemes, phonemes, audio)
+                # 3. Process the audio chunks
                 full_audio = None
                 for i, (gs, ps, audio) in enumerate(generator):
                     if full_audio is None:
