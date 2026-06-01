@@ -15,7 +15,6 @@ st.set_page_config(page_title="Secure Portal", page_icon="🔒", layout="centere
 SAMPLE_RATE = 24000
 MAX_CHARS = 2000
 
-
 def check_password():
     """Returns `True` if the user has entered the correct password."""
     if st.session_state.get("password_correct", False):
@@ -36,7 +35,6 @@ def check_password():
                 st.error("😕 Password incorrect. Please try again.")
 
     return False
-
 
 # Stop execution if the password is not correct
 if not check_password():
@@ -122,11 +120,10 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
-@st.cache_resource
+@st.cache_resource(max_entries=1)
 def load_pipeline():
+    """Cache the pipeline, but limit entries to ensure old memory is freed."""
     return KPipeline(lang_code='b')
-
 
 with st.spinner("Loading secure offline AI engine..."):
     pipeline = load_pipeline()
@@ -143,7 +140,6 @@ voices = {
     "👨🏼 Daniel (GB)": "bm_daniel"
 }
 
-
 # ---------- Helpers ----------
 
 def render_embed(html: str, height: int):
@@ -155,24 +151,20 @@ def render_embed(html: str, height: int):
         import streamlit.components.v1 as components
         components.html(html, height=height)
 
-
 def preprocess_for_tts(sentence: str) -> str:
     """Expand abbreviations so the synthesiser reads them naturally."""
     return re.sub(r'(?i)\bhse\b', 'H S E', sentence)
-
 
 def split_sentences(text: str):
     """Simple sentence splitter. Splits after . ! ? followed by whitespace."""
     parts = re.split(r'(?<=[.!?])\s+', text.strip())
     return [p.strip() for p in parts if p.strip()]
 
-
 def to_numpy(audio) -> np.ndarray:
     """Kokoro may return a torch tensor; coerce to a 1-D float32 numpy array."""
     if hasattr(audio, "detach"):
         audio = audio.detach().cpu().numpy()
     return np.asarray(audio, dtype=np.float32).reshape(-1)
-
 
 def estimate_words(sentence: str, base: float, duration: float):
     """Fallback: spread a sentence's duration across its words by length."""
@@ -189,11 +181,9 @@ def estimate_words(sentence: str, base: float, duration: float):
         t += d
     return out
 
-
 def merge_letter_runs(words):
     """Collapse runs of 2+ single uppercase letters (e.g. the H S E that
-    'HSE' was expanded into) back into one display token. The audio is
-    unchanged; only the on-screen text and the highlight span are merged."""
+    'HSE' was expanded into) back into one display token."""
     merged = []
     i, n = 0, len(words)
     while i < n:
@@ -220,20 +210,14 @@ def merge_letter_runs(words):
         i += 1
     return merged
 
-
 def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12):
-    """Synthesise sentence by sentence and collect word-level timings.
-
-    Returns (full_audio, words) where words is a list of
-    {t, ws, start, end} aligned to the concatenated audio. Uses Kokoro's
-    native token timestamps where available, otherwise estimates them.
-    """
+    """Synthesise sentence by sentence with aggressive memory management."""
     sentences = split_sentences(text)
     gap = np.zeros(int(SAMPLE_RATE * gap_seconds), dtype=np.float32)
 
     audio_parts = []
     words = []
-    cursor = 0.0  # global position in seconds
+    cursor = 0.0
 
     for s_idx, sentence in enumerate(sentences):
         processed = preprocess_for_tts(sentence)
@@ -241,12 +225,12 @@ def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12
 
         sentence_audio = []
         sentence_words = []
-        chunk_offset = 0.0  # position within this sentence
+        chunk_offset = 0.0
 
         for result in generator:
             audio = result.audio if hasattr(result, "audio") else result[2]
-            audio = to_numpy(audio)
-            duration = len(audio) / SAMPLE_RATE
+            audio_np = to_numpy(audio)
+            duration = len(audio_np) / SAMPLE_RATE
 
             for tok in (getattr(result, "tokens", None) or []):
                 text_t = getattr(tok, "text", None)
@@ -266,7 +250,12 @@ def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12
                                            "start": None, "end": None})
 
             chunk_offset += duration
-            sentence_audio.append(audio)
+            sentence_audio.append(audio_np)
+
+            # Clean up intermediate generation tensors immediately
+            del audio
+            del result
+            gc.collect()
 
         if not sentence_audio:
             continue
@@ -274,7 +263,6 @@ def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12
         seg = np.concatenate(sentence_audio)
         seg_dur = len(seg) / SAMPLE_RATE
 
-        # If this version returned no usable timestamps, estimate them.
         if not any(w["start"] is not None for w in sentence_words):
             sentence_words = estimate_words(sentence, cursor, seg_dur)
 
@@ -285,17 +273,25 @@ def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12
         if s_idx < len(sentences) - 1:
             audio_parts.append(gap)
             cursor += gap_seconds
+            
+        # Free up variables at the end of each sentence
+        del generator
+        del sentence_audio
+        gc.collect()
 
     if not audio_parts:
         return None, []
 
     words = merge_letter_runs(words)
-    return np.concatenate(audio_parts), words
-
+    final_audio = np.concatenate(audio_parts)
+    
+    del audio_parts
+    gc.collect()
+    
+    return final_audio, words
 
 def render_player(wav_bytes: bytes, words: list):
-    """Custom player: highlights each word as it is spoken and lets the
-    user click any word to play from there."""
+    """Custom player: highlights each word as it is spoken."""
     b64 = base64.b64encode(wav_bytes).decode("ascii")
     words_json = json.dumps(words)
 
@@ -378,7 +374,7 @@ def render_player(wav_bytes: bytes, words: list):
                 const w = words[i];
                 if (w.start !== null && t >= w.start && t < w.end) { idx = i; break; }
             }
-            if (idx === -1) return;   // between words: hold current highlight
+            if (idx === -1) return;   
             setActive(idx);
         });
 
@@ -391,7 +387,6 @@ def render_player(wav_bytes: bytes, words: list):
             .replace("__WORDS__", words_json))
 
     render_embed(html, height=380)
-
 
 # ---------- User Interface ----------
 
