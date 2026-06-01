@@ -3,4 +3,3 @@ torch
 soundfile
 kokoro
 misaki
-spacy
