@@ -2,5 +2,5 @@ streamlit
 torch
 soundfile
 transformers
-datasets
+datasets<4.0.0
 sentencepiece
