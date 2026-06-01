@@ -1,7 +1,2 @@
 streamlit
-torch
-torchvision
-soundfile
-transformers
-datasets
-sentencepiece
+edge-tts
