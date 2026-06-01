@@ -110,9 +110,8 @@ def load_synthesiser():
 
 with st.spinner("Initialising secure speech models..."):
     synthesiser = load_synthesiser()
-    # The dataset handles its own on-disk caching, bypassing Streamlit's cache bugs
-    # trust_remote_code=True is required for the latest datasets library
-    embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation", trust_remote_code=True)
+    # Using a modernised parquet version of the dataset to bypass the legacy script error
+    embeddings_dataset = load_dataset("regisss/cmu-arctic-xvectors", split="validation")
 
 voices = {
     "Voice 1 (Male)": 7306,
