@@ -5,6 +5,7 @@ from transformers import pipeline
 from datasets import load_dataset
 import io
 import hmac
+import re
 
 # Configure the Streamlit page
 st.set_page_config(page_title="Secure Portal", page_icon="🔒", layout="centered")
@@ -68,14 +69,27 @@ st.markdown("""
         color: white;
     }
     
-    /* Text Inputs and Text Areas */
-    .stTextInput > div > div > input, .stTextArea > div > textarea, .stSelectbox > div > div {
+    /* General Inputs */
+    .stTextInput > div > div > input, .stSelectbox > div > div {
         border-radius: 8px;
         border: 1px solid #cbd5e1 !important;
     }
-    .stTextInput > div > div > input:focus, .stTextArea > div > textarea:focus {
+    
+    /* FLOATING WHITE BOX FOR TEXT AREA */
+    div[data-testid="stTextArea"] textarea {
+        background-color: #ffffff !important;
+        border-radius: 16px !important;
+        padding: 18px !important;
+        box-shadow: 0 15px 35px -5px rgba(0, 104, 88, 0.15), 0 5px 15px -5px rgba(0, 0, 0, 0.05) !important;
+        border: 1px solid rgba(226, 232, 240, 0.8) !important;
+        color: #1e293b !important;
+        font-size: 1.05rem !important;
+        line-height: 1.5 !important;
+        transition: all 0.3s ease;
+    }
+    div[data-testid="stTextArea"] textarea:focus {
         border-color: #00bfa5 !important;
-        box-shadow: 0 0 0 1px #00bfa5 !important;
+        box-shadow: 0 15px 35px -5px rgba(0, 191, 165, 0.25), 0 5px 15px -5px rgba(0, 0, 0, 0.05) !important;
     }
     
     /* Custom Headers */
@@ -103,21 +117,23 @@ st.markdown(
 )
 
 # Load Models
-# We only cache the synthesiser to avoid pickling errors with datasets
 @st.cache_resource
 def load_synthesiser():
     return pipeline("text-to-speech", "microsoft/speecht5_tts")
 
 with st.spinner("Initialising secure speech models..."):
     synthesiser = load_synthesiser()
-    # Using a modernised parquet version of the dataset to bypass the legacy script error
     embeddings_dataset = load_dataset("regisss/cmu-arctic-xvectors", split="validation")
 
+# Distinctly mapped voices from the dataset
 voices = {
-    "Voice 1 (Male)": 7306,
-    "Voice 2 (Female)": 2271,
-    "Voice 3 (Male)": 6799,
-    "Voice 4 (Female)": 1138
+    "Scottish Male (awb)": 500,
+    "US Male 1 (bdl)": 1500,
+    "US Female 1 (clb)": 3000,
+    "Canadian Male (jmk)": 4000,
+    "Indian Male (ksp)": 5000,
+    "US Male 2 (rms)": 6000,
+    "US Female 2 (slt)": 7500
 }
 
 # User Interface
@@ -127,7 +143,7 @@ selected_voice = st.selectbox("Select Synthesiser Voice:", list(voices.keys()))
 text_input = st.text_area(
     "Enter the text you wish to convert:", 
     "Welcome to the HSE Capital and Estates digital infrastructure hub.",
-    height=120
+    height=150
 )
 
 # Generation Form/Button
@@ -137,11 +153,19 @@ if st.button("Synthesise Audio"):
     else:
         with st.spinner("Processing audio array..."):
             try:
+                # 1. PRE-PROCESS TEXT: Automatically change HSE to H S E so it spells it out
+                # The \b markers ensure it only targets the whole word, not words like 'THESE'
+                # (?i) makes it case-insensitive so it catches 'hse' as well
+                processed_text = re.sub(r'(?i)\bhse\b', 'H S E', text_input)
+                
+                # 2. Setup the Voice
                 speaker_index = voices[selected_voice]
                 speaker_embedding = torch.tensor(embeddings_dataset[speaker_index]["xvector"]).unsqueeze(0)
                 
-                speech = synthesiser(text_input, forward_params={"speaker_embeddings": speaker_embedding})
+                # 3. Generate Audio using the processed text
+                speech = synthesiser(processed_text, forward_params={"speaker_embeddings": speaker_embedding})
                 
+                # 4. Save to buffer and display
                 buffer = io.BytesIO()
                 sf.write(buffer, speech["audio"], samplerate=speech["sampling_rate"], format='WAV')
                 buffer.seek(0)
