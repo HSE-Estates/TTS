@@ -7,9 +7,39 @@ import io
 import hmac
 
 # Configure the Streamlit page
-st.set_page_config(page_title="HSE Capital & Estates | TTS", page_icon="🗣️", layout="centered")
+st.set_page_config(page_title="Secure Portal", page_icon="🔒", layout="centered")
 
-# --- Custom HSE CSS Styling ---
+def check_password():
+    """Returns `True` if the user has entered the correct password."""
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # Completely plain login screen
+    st.title("🔒 Secure Login")
+    st.write("Please authenticate to access this programme.")
+
+    with st.form("login_form"):
+        password_input = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+        
+        if submitted:
+            if hmac.compare_digest(password_input, st.secrets["password"]):
+                st.session_state["password_correct"] = True
+                st.rerun()
+            else:
+                st.error("😕 Password incorrect. Please try again.")
+    
+    return False
+
+# Stop execution if the password is not correct
+if not check_password():
+    st.stop()
+
+# ==========================================
+# POST-LOGIN: HSE BRANDING & APP LOGIC BELOW
+# ==========================================
+
+# Inject Custom HSE CSS Styling only after login
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
@@ -39,13 +69,13 @@ st.markdown("""
     }
     
     /* Text Inputs and Text Areas */
-    .stTextInput > div > div > input, .stTextArea > div > textarea {
+    .stTextInput > div > div > input, .stTextArea > div > textarea, .stSelectbox > div > div {
         border-radius: 8px;
-        border: 1px solid #cbd5e1;
+        border: 1px solid #cbd5e1 !important;
     }
     .stTextInput > div > div > input:focus, .stTextArea > div > textarea:focus {
-        border-color: #00bfa5;
-        box-shadow: 0 0 0 1px #00bfa5;
+        border-color: #00bfa5 !important;
+        box-shadow: 0 0 0 1px #00bfa5 !important;
     }
     
     /* Custom Headers */
@@ -55,54 +85,10 @@ st.markdown("""
         font-weight: 900;
         letter-spacing: -0.02em;
     }
-    
-    /* Info/Warning Boxes */
-    .stAlert {
-        border-radius: 12px;
-        border: none;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-    }
     </style>
 """, unsafe_allow_html=True)
 
-def check_password():
-    """Returns `True` if the user has entered the correct password."""
-    if st.session_state.get("password_correct", False):
-        return True
-
-    # HSE Branded Login Screen
-    st.markdown(
-        """
-        <div style='text-align: center; padding: 2rem 0;'>
-            <img src="https://www.esther.ie/wp-content/uploads/2022/05/HSE-Logo-Green-NEW-no-background.png" width="140" style="margin-bottom: 1rem;">
-            <h1>HSE Estates & Capital</h1>
-            <p style="color: #006858; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; font-size: 0.8rem;">Digital Infrastructure Hub</p>
-            <p style="color: #64748b; font-size: 1.1rem;">Secure Login Required</p>
-        </div>
-        """, 
-        unsafe_allow_html=True
-    )
-
-    # Login Form with Submit Button
-    with st.form("login_form"):
-        password_input = st.text_input("Enter your access credential:", type="password")
-        submitted = st.form_submit_button("Secure Login")
-        
-        if submitted:
-            if hmac.compare_digest(password_input, st.secrets["password"]):
-                st.session_state["password_correct"] = True
-                st.rerun()
-            else:
-                st.error("😕 Password incorrect. Please try again.")
-    
-    return False
-
-# Stop execution if the password is not correct
-if not check_password():
-    st.stop()
-
-# --- Main Programme Content ---
-
+# HSE Header
 st.markdown(
     """
     <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 2rem; background: white; padding: 1.5rem; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.05);">
@@ -117,14 +103,16 @@ st.markdown(
 )
 
 # Load Models
+# We only cache the synthesiser to avoid pickling errors with datasets
 @st.cache_resource
-def load_models():
-    synthesiser = pipeline("text-to-speech", "microsoft/speecht5_tts")
-    embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
-    return synthesiser, embeddings_dataset
+def load_synthesiser():
+    return pipeline("text-to-speech", "microsoft/speecht5_tts")
 
 with st.spinner("Initialising secure speech models..."):
-    synthesiser, embeddings_dataset = load_models()
+    synthesiser = load_synthesiser()
+    # The dataset handles its own on-disk caching, bypassing Streamlit's cache bugs
+    # trust_remote_code=True is required for the latest datasets library
+    embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation", trust_remote_code=True)
 
 voices = {
     "Voice 1 (Male)": 7306,
