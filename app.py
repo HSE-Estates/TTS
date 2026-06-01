@@ -1,11 +1,9 @@
 import streamlit as st
-import torch
-import soundfile as sf
-from transformers import pipeline
-from datasets import load_dataset
 import io
 import hmac
 import re
+import asyncio
+import edge_tts
 
 # Configure the Streamlit page
 st.set_page_config(page_title="Secure Portal", page_icon="🔒", layout="centered")
@@ -116,23 +114,16 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Load Models
-@st.cache_resource
-def load_synthesiser():
-    return pipeline("text-to-speech", "microsoft/speecht5_tts")
-
-with st.spinner("Initialising secure speech models..."):
-    synthesiser = load_synthesiser()
-    embeddings_dataset = load_dataset("regisss/cmu-arctic-xvectors", split="validation")
-
-# Distinctly mapped voices from the dataset
+# Microsoft Edge GB Voices from user request
 voices = {
-    "🇬🇧 British (Scottish) Male": 500,
-    "🌎 Neutral Female 1": 3000,
-    "🌎 Neutral Female 2": 7500,
-    "🌎 Neutral Male": 1500,
-    "🇨🇦 Canadian Male": 4000,
-    "🇮🇳 Indian Male": 5000
+    "👩🏼 Emma (GB)": "en-GB-EmmaNeural",
+    "👩🏽 Isabella (GB)": "en-GB-IsabellaNeural",
+    "👩🏻 Alice (GB)": "en-GB-AliceNeural",
+    "👩🏼 Lily (GB)": "en-GB-LilyNeural",
+    "👨🏼 George (GB)": "en-GB-GeorgeNeural",
+    "👨🏽 Fable (GB)": "en-GB-FableNeural",
+    "👨🏻 Lewis (GB)": "en-GB-LewisNeural",
+    "👨🏼 Daniel (GB)": "en-GB-DanielNeural"
 }
 
 # User Interface
@@ -145,32 +136,34 @@ text_input = st.text_area(
     height=150
 )
 
+# Async function to generate audio from edge-tts
+async def generate_audio(text, voice_name):
+    communicate = edge_tts.Communicate(text, voice_name)
+    audio_bytes = b""
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_bytes += chunk["data"]
+    return audio_bytes
+
 # Generation Form/Button
 if st.button("Synthesise Audio"):
     if text_input.strip() == "":
         st.warning("Please enter some text to synthesise.")
     else:
-        with st.spinner("Processing audio array..."):
+        with st.spinner("Connecting to neural voice API..."):
             try:
-                # 1. PRE-PROCESS TEXT: Automatically change HSE to H S E so it spells it out
-                # The \b markers ensure it only targets the whole word, not words like 'THESE'
-                # (?i) makes it case-insensitive so it catches 'hse' as well
-                processed_text = re.sub(r'(?i)\bhse\b', 'H S E', text_input)
+                # 1. PRE-PROCESS TEXT: Change HSE to H. S. E. so the neural voice reads the letters
+                processed_text = re.sub(r'(?i)\bhse\b', 'H. S. E.', text_input)
                 
-                # 2. Setup the Voice
-                speaker_index = voices[selected_voice]
-                speaker_embedding = torch.tensor(embeddings_dataset[speaker_index]["xvector"]).unsqueeze(0)
+                # 2. Setup the Voice ID
+                voice_id = voices[selected_voice]
                 
-                # 3. Generate Audio using the processed text
-                speech = synthesiser(processed_text, forward_params={"speaker_embeddings": speaker_embedding})
+                # 3. Generate Audio using asyncio
+                audio_data = asyncio.run(generate_audio(processed_text, voice_id))
                 
-                # 4. Save to buffer and display
-                buffer = io.BytesIO()
-                sf.write(buffer, speech["audio"], samplerate=speech["sampling_rate"], format='WAV')
-                buffer.seek(0)
-                
+                # 4. Display audio player
                 st.success("✅ Audio synthesised successfully.")
-                st.audio(buffer, format="audio/wav")
+                st.audio(audio_data, format="audio/mp3")
                 
             except Exception as e:
                 st.error(f"An error occurred during synthesis: {e}")
