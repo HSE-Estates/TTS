@@ -127,13 +127,12 @@ with st.spinner("Initialising secure speech models..."):
 
 # Distinctly mapped voices from the dataset
 voices = {
-    "Scottish Male (awb)": 500,
-    "US Male 1 (bdl)": 1500,
-    "US Female 1 (clb)": 3000,
-    "Canadian Male (jmk)": 4000,
-    "Indian Male (ksp)": 5000,
-    "US Male 2 (rms)": 6000,
-    "US Female 2 (slt)": 7500
+    "🇬🇧 British (Scottish) Male": 500,
+    "🌎 Neutral Female 1": 3000,
+    "🌎 Neutral Female 2": 7500,
+    "🌎 Neutral Male": 1500,
+    "🇨🇦 Canadian Male": 4000,
+    "🇮🇳 Indian Male": 5000
 }
 
 # User Interface
