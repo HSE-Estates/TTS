@@ -1,2 +1,2 @@
 streamlit
-edge-tts
+edge_tts
