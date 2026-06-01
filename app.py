@@ -4,6 +4,8 @@ import hmac
 import re
 import asyncio
 import edge_tts
+import tempfile
+import os
 
 # Configure the Streamlit page
 st.set_page_config(page_title="Secure Portal", page_icon="🔒", layout="centered")
@@ -114,7 +116,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Microsoft Edge GB Voices from user request
+# Microsoft Edge GB Voices
 voices = {
     "👩🏼 Emma (GB)": "en-GB-EmmaNeural",
     "👩🏽 Isabella (GB)": "en-GB-IsabellaNeural",
@@ -136,37 +138,47 @@ text_input = st.text_area(
     height=150
 )
 
-# Async function to generate audio from edge-tts
-async def generate_audio(text, voice_name):
+# Robust async function to write safely to a temp file
+async def generate_audio(text, voice_name, output_path):
     communicate = edge_tts.Communicate(text, voice_name)
-    audio_bytes = b""
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_bytes += chunk["data"]
-    return audio_bytes
+    await communicate.save(output_path)
 
 # Generation Form/Button
 if st.button("Synthesise Audio"):
     if text_input.strip() == "":
         st.warning("Please enter some text to synthesise.")
     else:
-        with st.spinner("Connecting to neural voice API..."):
+        with st.spinner("Connecting to Microsoft Neural Voice API..."):
             try:
-                # 1. PRE-PROCESS TEXT: Change HSE to H. S. E. so the neural voice reads the letters
-                processed_text = re.sub(r'(?i)\bhse\b', 'H. S. E.', text_input)
+                # 1. PRE-PROCESS TEXT: Use spaces instead of full stops to avoid silence bugs
+                processed_text = re.sub(r'(?i)\bhse\b', 'H S E', text_input)
                 
-                # 2. Setup the Voice ID
+                # 2. Setup the Voice ID and temporary file path
                 voice_id = voices[selected_voice]
                 
-                # 3. Generate Audio using asyncio
-                audio_data = asyncio.run(generate_audio(processed_text, voice_id))
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+                    temp_path = fp.name
                 
-                # 4. Display audio player
+                # 3. Generate Audio 
+                asyncio.run(generate_audio(processed_text, voice_id, temp_path))
+                
+                # 4. Read the safely saved audio
+                with open(temp_path, "rb") as f:
+                    audio_data = f.read()
+                    
+                # Clean up the temp file
+                os.remove(temp_path)
+                
+                if not audio_data:
+                    raise ValueError("Empty audio received. Microsoft Azure may be blocking this IP address.")
+                
+                # 5. Display audio player
                 st.success("✅ Audio synthesised successfully.")
                 st.audio(audio_data, format="audio/mp3")
                 
             except Exception as e:
                 st.error(f"An error occurred during synthesis: {e}")
+                st.info("💡 If this persists, Microsoft Azure is likely blocking Streamlit Cloud's public IP address. Running this code locally on your own machine will solve it instantly.")
 
 # --- Footer ---
 st.markdown("---")
