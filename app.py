@@ -190,6 +190,37 @@ def estimate_words(sentence: str, base: float, duration: float):
     return out
 
 
+def merge_letter_runs(words):
+    """Collapse runs of 2+ single uppercase letters (e.g. the H S E that
+    'HSE' was expanded into) back into one display token. The audio is
+    unchanged; only the on-screen text and the highlight span are merged."""
+    merged = []
+    i, n = 0, len(words)
+    while i < n:
+        w = words[i]
+        if len(w["t"]) == 1 and w["t"].isalpha() and w["t"].isupper():
+            j = i
+            run = []
+            while (j < n and len(words[j]["t"]) == 1
+                   and words[j]["t"].isalpha() and words[j]["t"].isupper()):
+                run.append(words[j])
+                j += 1
+            if len(run) >= 2:
+                starts = [r["start"] for r in run if r["start"] is not None]
+                ends = [r["end"] for r in run if r["end"] is not None]
+                merged.append({
+                    "t": "".join(r["t"] for r in run),
+                    "ws": run[-1]["ws"],
+                    "start": min(starts) if starts else None,
+                    "end": max(ends) if ends else None,
+                })
+                i = j
+                continue
+        merged.append(w)
+        i += 1
+    return merged
+
+
 def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12):
     """Synthesise sentence by sentence and collect word-level timings.
 
@@ -258,6 +289,7 @@ def synthesise(text: str, voice_id: str, speed: float, gap_seconds: float = 0.12
     if not audio_parts:
         return None, []
 
+    words = merge_letter_runs(words)
     return np.concatenate(audio_parts), words
 
 
@@ -372,11 +404,11 @@ with gear_col:
         selected_voice = st.selectbox(
             "Synthesiser voice",
             voice_names,
-            index=voice_names.index("👩🏼 Lily (GB)")
+            index=voice_names.index("👨🏼 George (GB)")
         )
         speed = st.slider(
             "Pace (lower = slower, more natural)",
-            min_value=0.7, max_value=1.2, value=0.9, step=0.05
+            min_value=0.7, max_value=1.2, value=0.85, step=0.05
         )
 
 text_input = st.text_area(
