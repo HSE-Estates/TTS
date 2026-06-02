@@ -403,7 +403,7 @@ with gear_col:
         )
         speed = st.slider(
             "Pace (lower = slower, more natural)",
-            min_value=0.7, max_value=1.2, value=0.85, step=0.05
+            min_value=0.7, max_value=1.2, value=0.95, step=0.05
         )
 
 text_input = st.text_area(
